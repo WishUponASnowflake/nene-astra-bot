@@ -1,0 +1,26 @@
+{
+  "dashscope_config": {
+    "description": "阿里雲 Dashscope 配置 (API Key 請設置在環境變量 DASHSCOPE_API_KEY 中)",
+    "type": "object",
+    "items": {
+      "model_name": {
+        "description": "模型名稱",
+        "type": "string",
+        "default": "multimodal-embedding-v1",
+        "hint": "要使用的多模態 Embedding 模型。通常保持默認即可。"
+      }
+    }
+  },
+  "max_local_images": {
+    "description": "本地存儲圖片的數量上限",
+    "type": "int",
+    "default": 50,
+    "hint": "插件會在本地保存近期圖片用於搜索結果展示。為防止佔用過多硬碟，這裡可以設置一個上限，超過該數量將自動刪除最舊的圖片。"
+  },
+  "top_k_results": {
+    "description": "使用 /rag_search 命令時，返回最相關結果的數量。",
+    "type": "int",
+    "default": 5,
+    "hint": "建議設置在 3 到 10 之間。"
+  }
+}
