@@ -95,41 +95,31 @@ class EventHandler:
             yield event.plain_result("抱歉，此命令只能在群聊中使用。")
             return
 
-        top_k = self.config.get("top_k_results", 5)
-        #yield event.plain_result(f"正在為你在群聊 {group_id} 中搜索“{query}”的相關記錄...")
+        top_k = self.config.get("top_k_text_results", 5)
+        top_j = self.config.get("top_j_image_results", 3)
         
-        results = await self.rag_db.query(query, group_id, top_k)
+        results = await self.rag_db.query(query, group_id, top_k, top_j)
         
         if not results:
             yield event.plain_result("沒有找到相關的聊天記錄。")
             return
             
-        #yield event.plain_result(f"找到關於“{query}”的最相關的 {len(results)} 條記錄：")
-
         # 遍歷結果並逐條發送
         for res in results:
             ts = datetime.fromtimestamp(res['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
             sender_info = f"[{ts}] {res['sender_name']}:"
-            #logger.info(res['text'])
-            # 檢查是否是圖片記錄
             image_path_str = res.get('image_path')
-            if res['text'] == "[圖片消息]":
+            if res['text'] == "[圖片消息]" and image_path_str:
                 image_path = Path(image_path_str)
-                #logger.info(image_path_str)
-                # 檢查本地圖片文件是否還存在
                 if image_path.exists():
-                    # 如果存在，發送“發送者信息” + 圖片
                     yield event.chain_result([
                         Comp.Plain(sender_info),
-                        Comp.Image.fromFileSystem(image_path_str) # 從本地文件系統發送圖片
+                        Comp.Image.fromFileSystem(image_path_str)
                     ])
                 else:
-                    # 如果圖片因被清理而不再存在
                     yield event.plain_result(f"{sender_info}\n[一張已過期的圖片] (ID: {image_path.stem})")
             else:
-                # 如果是文本記錄，直接發送
                 text_content = res['text']
-                #yield event.plain_result(f"{sender_info} {text_content}")
+                yield event.plain_result(f"{sender_info} {text_content}")
             
-            # 每條消息之間稍微停頓一下，避免刷屏
             await asyncio.sleep(0.5)

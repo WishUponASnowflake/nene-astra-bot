@@ -65,15 +65,30 @@ class RAGDatabase:
         except Exception as e:
             logger.error(f"調用 Dashscope 進行圖片 embedding 或寫入數據庫失敗: {e}")
             
-    async def query(self, query_text: str, group_id: str, top_k: int = 5) -> list:
+    async def query(self, query_text: str, group_id: str, top_k: int = 5, top_j: int = 3) -> list:
         if not self.provider or self.table is None: return []
         try:
             # --- 主要修改點 ---
             # 使用 asyncio.to_thread
             query_vector = await asyncio.to_thread(self.provider.get_text_embedding, query_text)
             # ------------------
-            results = self.table.search(query_vector).where(f"group_id = '{group_id}'").limit(top_k).to_list()
+            
+            # 查詢文本記錄
+            text_results = self.table.search(query_vector)\
+                .where(f"group_id = '{group_id}' AND image_path = ''")\
+                .limit(top_k)\
+                .to_list()
+
+            # 查詢圖片記錄
+            image_results = self.table.search(query_vector)\
+                .where(f"group_id = '{group_id}' AND text = '[圖片消息]'")\
+                .limit(top_j)\
+                .to_list()
+            
+            # 合併並排序
+            results = text_results + image_results
             results.sort(key=lambda x: x['timestamp'], reverse=True)
+            
             return results
         except Exception as e:
             logger.error(f"查詢 RAG 數據庫失敗: {e}")
