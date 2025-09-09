@@ -19,7 +19,7 @@ class DashscopeProvider:
         self.id = f"dashscope_embedder_{self.model_name}"
         
         # multimodal-embedding-v1 的維度是固定的
-        self.dimension = 1536
+        self.dimension = 1024
         # 注意：不再需要 dashscope.api_key = ... 這一行，SDK 會自動讀取環境變量
 
     @property
@@ -65,6 +65,7 @@ class DashscopeProvider:
             if resp.status_code == HTTPStatus.OK:
                 embedding = resp.output['embeddings'][0]['embedding']
                 return embedding
+                
             else:
                 logger.error(f"調用 Dashscope 圖片 Embedding API 失敗: Code: {resp.code}, Message: {resp.message}")
                 raise ConnectionError(f"Dashscope API Error: {resp.message}")

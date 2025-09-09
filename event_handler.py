@@ -1,7 +1,7 @@
 import aiohttp
 import uuid
 import asyncio
-import os # 導入 os 模塊用於文件操作
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -24,7 +24,7 @@ class EventHandler:
 
     def _cleanup_old_images(self):
         """
-        [新功能] 清理舊的圖片文件，維持本地緩存數量不超過上限。
+        [功能] 清理舊的圖片文件，維持本地緩存數量不超過上限。
         """
         try:
             # 獲取目錄下所有的圖片文件
@@ -49,7 +49,9 @@ class EventHandler:
             logger.error(f"執行圖片清理任務時發生錯誤: {e}")
 
     async def _download_image(self, url: str) -> Path | None:
-        # ... (此方法無需修改) ...
+        """
+        異步從 URL 下載圖片並保存到本地。
+        """
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as resp:
@@ -64,7 +66,9 @@ class EventHandler:
             return None
 
     async def handle_group_message_logging(self, event: AstrMessageEvent):
-        # ... (前半部分邏輯不變) ...
+        """
+        [業務邏輯] 處理群聊消息，提取文本和圖片，調用數據庫層進行存儲，並觸發圖片清理。
+        """
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
         sender_name = event.get_sender_name()
@@ -72,7 +76,6 @@ class EventHandler:
         
         for component in event.message_obj.message:
             if isinstance(component, Comp.Plain):
-                # ... (文本處理不變) ...
                 text_content = component.text.strip()
                 if text_content:
                     await self.rag_db.add_text(group_id, sender_id, sender_name, text_content, timestamp)
@@ -80,18 +83,20 @@ class EventHandler:
                 if image_url := component.url:
                     if saved_path := await self._download_image(image_url):
                         await self.rag_db.add_image(group_id, sender_id, sender_name, saved_path, timestamp)
-                        # [新功能] 每次成功保存新圖片後，觸發一次清理檢查
+                        # 每次成功保存新圖片後，觸發一次清理檢查
                         self._cleanup_old_images()
 
     async def process_rag_search_command(self, event: AstrMessageEvent, query: str):
-        # ... (前半部分邏輯不變) ...
+        """
+        [業務邏輯] 處理 RAG 搜索指令，並將結果格式化後發送（文本直接發，圖片發送圖片文件）。
+        """
         group_id = event.get_group_id()
         if not group_id:
             yield event.plain_result("抱歉，此命令只能在群聊中使用。")
             return
 
         top_k = self.config.get("top_k_results", 5)
-        yield event.plain_result(f"正在為你在群 {group_id} 中搜索“{query}”的相關記錄...")
+        #yield event.plain_result(f"正在為你在群聊 {group_id} 中搜索“{query}”的相關記錄...")
         
         results = await self.rag_db.query(query, group_id, top_k)
         
@@ -99,24 +104,24 @@ class EventHandler:
             yield event.plain_result("沒有找到相關的聊天記錄。")
             return
             
-        # --- [主要修改點] 重構搜索結果的發送邏輯 ---
-        
-        yield event.plain_result(f"找到關於“{query}”的最相關的 {len(results)} 條記錄：")
+        #yield event.plain_result(f"找到關於“{query}”的最相關的 {len(results)} 條記錄：")
 
         # 遍歷結果並逐條發送
         for res in results:
             ts = datetime.fromtimestamp(res['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
             sender_info = f"[{ts}] {res['sender_name']}:"
-
+            #logger.info(res['text'])
             # 檢查是否是圖片記錄
-            if image_path_str := res.get('image_path'):
+            image_path_str = res.get('image_path')
+            if res['text'] == "[圖片消息]":
                 image_path = Path(image_path_str)
+                #logger.info(image_path_str)
                 # 檢查本地圖片文件是否還存在
                 if image_path.exists():
                     # 如果存在，發送“發送者信息” + 圖片
                     yield event.chain_result([
                         Comp.Plain(sender_info),
-                        Comp.Image.fromFileSystem(image_path) # 從本地文件系統發送圖片
+                        Comp.Image.fromFileSystem(image_path_str) # 從本地文件系統發送圖片
                     ])
                 else:
                     # 如果圖片因被清理而不再存在
@@ -124,7 +129,7 @@ class EventHandler:
             else:
                 # 如果是文本記錄，直接發送
                 text_content = res['text']
-                yield event.plain_result(f"{sender_info} {text_content}")
+                #yield event.plain_result(f"{sender_info} {text_content}")
             
             # 每條消息之間稍微停頓一下，避免刷屏
             await asyncio.sleep(0.5)
