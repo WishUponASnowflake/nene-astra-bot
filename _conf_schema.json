@@ -1,32 +1,68 @@
 {
   "dashscope_config": {
-    "description": "阿里雲 Dashscope 配置 (API Key 請設置在環境變量 DASHSCOPE_API_KEY 中)",
+    "description": "阿里云 Dashscope 配置 (API Key 请设置在环境变量 DASHSCOPE_API_KEY 中)",
     "type": "object",
     "items": {
       "model_name": {
-        "description": "模型名稱",
+        "description": "模型名称",
         "type": "string",
         "default": "multimodal-embedding-v1",
-        "hint": "要使用的多模態 Embedding 模型。通常保持默認即可。"
+        "hint": "要使用的多模态 Embedding 模型。通常保持默认即可。"
+      }
+    }
+  },
+  "reply_possibility": {
+    "description": "主动回复的触发概率 (0.0 至 1.0)",
+    "type": "float",
+    "default": 0.1,
+    "hint": "设置一个 0 到 1 之间的小数。例如，0.1 代表有 10% 的概率在非 @ 情况下触发主动回复判断。"
+  },
+  "main_llm_provider": {
+    "description": "最终回复使用的大语言模型配置",
+    "type": "object",
+    "items": {
+      "provider_id": {
+        "description": "服务提供商 ID",
+        "type": "string",
+        "hint": "请选择一个用于生成最终回复的大语言模型。",
+        "_special": "select_provider"
+      },
+      "persona_prompt": {
+        "description": "人格 Prompt (System Prompt)",
+        "type": "text",
+        "default": "你是一个友好、乐于助人的群聊助手。",
+        "hint": "在这里输入你希望大模型扮演的人格或遵循的规则，它将作为 System Prompt 发送给模型。"
+      }
+    }
+  },
+  "judgement_model": {
+    "description": "用于判断是否主动回复的小模型配置",
+    "type": "object",
+    "items": {
+      "provider_id": {
+        "description": "服务提供商 ID",
+        "type": "string",
+        "hint": "请选择一个轻量、快速的模型用作回复意愿判断。该模型仅需根据对话判断是否闲聊或与 AI 相关，并回答 YES 或 NO。",
+        "_special": "select_provider"
       }
     }
   },
   "max_local_images": {
-    "description": "本地存儲圖片的數量上限",
+    "description": "本地存储图片的数量上限",
     "type": "int",
     "default": 50,
-    "hint": "插件會在本地保存近期圖片用於搜索結果展示。為防止佔用過多硬碟，這裡可以設置一個上限，超過該數量將自動刪除最舊的圖片。"
+    "hint": "插件会在本地保存近期图片用于搜索结果展示。为防止占用过多硬盘，这里可以设置一个上限，超过该数量将自动删除最旧的图片。"
   },
   "top_k_text_results": {
-    "description": "使用 /rag_search 命令時，返回最相關的文本結果的數量。",
+    "description": "使用 /rag_search 命令时，返回最相关的文本结果的数量。",
     "type": "int",
     "default": 5,
-    "hint": "建議設置在 3 到 10 之間。"
+    "hint": "建议设置在 3 到 10 之间。"
   },
   "top_j_image_results": {
-    "description": "使用 /rag_search 命令時，返回最相關的圖片結果的數量。",
+    "description": "使用 /rag_search 命令时，返回最相关的图片结果的数量。",
     "type": "int",
     "default": 3,
-    "hint": "建議設置在 1 到 5 之間。"
+    "hint": "建议设置在 1 到 5 之间。"
   }
 }
