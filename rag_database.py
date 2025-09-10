@@ -74,13 +74,13 @@ class RAGDatabase:
             # --- 核心修改点 ---
             # 查询文本记录，移除了 group_id 的限制
             text_results = self.table.search(query_vector)\
-                .where(f"image_path = ''")\
+                .where(f"group_id = '{group_id}' AND image_path = ''")\
                 .limit(top_k)\
                 .to_list()
 
             # 查询图片记录，移除了 group_id 的限制
             image_results = self.table.search(query_vector)\
-                .where(f"text = '[图片消息]'")\
+                .where(f"group_id = '{group_id}' AND text = '[图片消息]'")\
                 .limit(top_j)\
                 .to_list()
             # ------------------
