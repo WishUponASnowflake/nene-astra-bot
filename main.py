@@ -10,7 +10,7 @@ from .event_handler import EventHandler
 from .dashscope_provider import DashscopeProvider
 
 @register(
-    "nene-bot",
+    "astrbot_plugin_nene_bot",
     "sdy_zjx", # 作者名
     "一个基于RAG与大模型的赛博群友",
     "1.0.0", 
