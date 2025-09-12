@@ -10,10 +10,10 @@ from .event_handler import EventHandler
 from .dashscope_provider import DashscopeProvider
 
 @register(
-    "rag_collector",
+    "nene-bot",
     "sdy_zjx", # 作者名
-    "一个使用 Dashscope 的 RAG 数据库插件 (API Key from Env)",
-    "4.2.0", 
+    "一个基于RAG与大模型的赛博群友",
+    "1.0.0", 
     "https://github.com/your-repo/astrbot_plugin_rag_collector"
 )
 class RAGCollectorPlugin(Star):
@@ -72,6 +72,59 @@ class RAGCollectorPlugin(Star):
         """
         async for result in self.handler.process_rag_search_command(event, query):
             yield result
+
+    @filter.command("llm_mute")
+    async def llm_mute(self, event: AstrMessageEvent, *, scope: str):
+        """
+        [注册] /llm_mute 指令，禁用自动回复。
+        """
+        # --- 修正點 ---
+        sender_id = event.get_sender_id()
+        admins = self.config.get("admins_id", [])
+        logger.info(sender_id)
+        is_admin = sender_id in admins
+        logger.info(admins)
+        # ---------------
+
+        if not is_admin:
+            yield event.plain_result("抱歉，只有管理员才能使用此命令。")
+            return
+            
+        if not scope:
+            yield event.plain_result("请输入要禁用的范围 (all / 群号)。")
+            return
+
+        self.handler.mute(scope)
+        if scope == 'all':
+            yield event.plain_result("已全局禁用所有群聊的自动回复功能。")
+        else:
+            yield event.plain_result(f"已禁用群聊 {scope} 的自动回复功能。")
+
+    @filter.command("llm_enable")
+    async def llm_enable(self, event: AstrMessageEvent, *, scope: str):
+        """
+        [注册] /llm_enable 指令，启用自动回复。
+        """
+        # --- 修正點 ---
+        sender_id = event.get_sender_id()
+        admins = self.config.get("admins_id", [])
+        is_admin = sender_id in admins
+        # ---------------
+        
+        if not is_admin:
+            yield event.plain_result("抱歉，只有管理员才能使用此命令。")
+            return
+            
+        if not scope:
+            yield event.plain_result("请输入要启用的范围 (all / 群号)。")
+            return
+            
+        self.handler.unmute(scope)
+        if scope == 'all':
+            yield event.plain_result("已全局启用所有群聊的自动回复功能。")
+        else:
+            yield event.plain_result(f"已启用群聊 {scope} 的自动回复功能。")
+
 
     async def terminate(self):
         """

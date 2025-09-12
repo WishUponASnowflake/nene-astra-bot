@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import os
 import random
+import json
 from pathlib import Path
 from datetime import datetime
 
@@ -37,6 +38,41 @@ class EventHandler:
         self.at_message_window = self.config.get("at_message_window", 15)
         self.at_message_prompt = self.config.get("at_message_prompt", "我在，请讲。在 {timeout} 秒内我会一并收听您的后续消息...")
         self.user_conversations = {}  # 用于存储用户会话状态
+
+        # 初始化静音列表
+        self.mute_list_path = self.image_save_path.parent / "mute_list.json"
+        self.muted_groups = self._load_mute_list()
+
+    def _load_mute_list(self) -> set:
+        if self.mute_list_path.exists():
+            try:
+                with open(self.mute_list_path, 'r', encoding='utf-8') as f:
+                    return set(json.load(f))
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"加载静音列表失败: {e}")
+                return set()
+        return set()
+
+    def _save_mute_list(self):
+        try:
+            with open(self.mute_list_path, 'w', encoding='utf-8') as f:
+                json.dump(list(self.muted_groups), f, indent=4)
+        except IOError as e:
+            logger.error(f"保存静音列表失败: {e}")
+
+    def mute(self, scope: str):
+        """静音指定范围"""
+        self.muted_groups.add(scope)
+        self._save_mute_list()
+
+    def unmute(self, scope: str):
+        """解除静音指定范围"""
+        if scope == 'all':
+            self.muted_groups.clear() # 解除全局静音时，也清除所有单独的群聊静音
+        else:
+            self.muted_groups.discard(scope)
+        self._save_mute_list()
+
 
     async def _parse_message_components(self, event: AstrMessageEvent) -> tuple[list[str], list[str]]:
         """
@@ -160,6 +196,10 @@ class EventHandler:
         """
         [新逻辑] 使用小模型判断回复概率，决定是否回复。
         """
+        group_id = event.get_group_id()
+        if 'all' in self.muted_groups or (group_id and group_id in self.muted_groups):
+            return False
+
         if is_mentioned:
             logger.info("机器人被提及，强制回复。")
             return True

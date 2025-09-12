@@ -11,6 +11,12 @@
       }
     }
   },
+  "admins_id": {
+    "description": "插件管理员 ID 列表",
+    "type": "list",
+    "default": [],
+    "hint": "在此处添加有权使用管理命令（如 llm_mute/llm_enable）的用户 ID。一行一个ID。"
+  },
   "at_message_window": {
     "description": "被 @ 后等待后续消息的窗口时间（秒）",
     "type": "int",
