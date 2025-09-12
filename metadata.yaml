@@ -1,6 +1,6 @@
-id: rag_collector
-name: RAG 聊天记录收集器
+id: nene-bot
+name: nene-bot
 author: sdy_zjx
 version: 1.0.0
-description: 一个自动监听群聊消息并存入RAG数据库的插件，提供历史记录检索功能。
-repo: https://github.com/your-repo/astrbot_plugin_rag_collector
+description: 一个基于RAG与大模型的多模态赛博群友。
+repo: https://github.com/sdyzjx/nene-astra-bot.git
