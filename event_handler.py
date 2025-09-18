@@ -22,13 +22,27 @@ class EventHandler:
         self.image_save_path = image_save_path
         self.image_save_path.mkdir(parents=True, exist_ok=True)
         self.max_local_images = self.config.get("max_local_images", 50)
-        
-        # 读取回复意愿判断模型的配置
+
+        # 更新判断模型的 Prompt，要求返回包含概率和回复方式的 JSON
         judgement_model_config = self.config.get("judgement_model", {})
         self.judgement_provider_id = judgement_model_config.get("provider_id")
-        self.judgement_prompt = judgement_model_config.get("judgement_prompt", "你是一个群聊中 AI 助手的回复决策模型。你的任务是判断 AI 助手对以下新消息进行回复的“必要性”和“趣味性”，并给出一个 0.0 到 1.0 之间的概率分数。回复标准：1. 话题轻松有趣、适合闲聊时，概率更高。2. 话题直接与 AI、机器人、模型或代码相关时，概率应该很高（0.8-1.0）。3. 用户在明确寻求帮助、提问时，概率应该为 1.0。4. 如果是严肃、专业或工作相关的话题，概率应该很低。5. 无意义的闲聊或表情符号，概率应该接近 0.0。你的回答必须只有一个数字，例如：0.75。群聊新消息：\"{message_text}\" 根据以上标准，AI 助手回复的概率是？")
+        self.judgement_prompt = judgement_model_config.get("judgement_prompt", """你是一个群聊中 AI 助手的回复决策模型。你的任务是判断 AI 助手对以下新消息进行回复的“必要性”和“趣味性”，并决定回复方式。
+
+请遵循以下标准：1.  **必要性判断**：给出一个 0.0 到 1.0 之间的概率分数。你的名字是宁宁。当有人叫你的名字的时候你的回复概率为1：1. 话题轻松有趣、适合闲聊时，概率更高。2. 话题直接与 AI、机器人、模型或代码相关时，概率应该较高（0.3-0.6）。3. 用户在明确寻求帮助、提问时，概率应该为 0.4-0.7。4. 如果是严肃、专业或工作相关的话题，概率应该为0。5. 无意义的闲聊或表情符号，概率应该接近 0.0。6. 用户在和其他用户对话（如at其他用户 ，出现形如[At:xxxxxx]；聊天内容中出现人名/网名；话题明显与你无关）时你不应该插嘴。你的回复概率应该为0。你应该学会读气氛。 7. **你的名字是宁宁。当有人叫你的名字的时候你的回复概率为1. **  
+2.  **回复方式判断**：
+    -   如果消息是对话题的延续、补充或者是一个开放性的陈述，适合用 'direct' (直接回复)。
+    -   如果消息是一个明确的问题，或者上下文不清晰，为了让对话更清晰，适合用 'quote' (引用回复)。
+    -   默认情况下，倾向于使用 'direct'，让对话更自然。
+你的回答必须是一个严格的 JSON 对象，格式如下：
+{{"probability": <概率值>, "reply_style": "<direct 或 quote>"}}
+
+例如：
+{{"probability": 0.85, "reply_style": "direct"}}
+
+群聊新消息："{message_text}"
+根据以上标准，你的决策是？""")
         self.reply_possibility = self.config.get("reply_possibility", 0.1)
-        
+
         # 读取最终回复大模型和人格的配置
         main_llm_config = self.config.get("main_llm_provider", {})
         self.main_llm_provider_id = main_llm_config.get("provider_id")
@@ -68,7 +82,7 @@ class EventHandler:
     def unmute(self, scope: str):
         """解除静音指定范围"""
         if scope == 'all':
-            self.muted_groups.clear() # 解除全局静音时，也清除所有单独的群聊静音
+            self.muted_groups.clear()
         else:
             self.muted_groups.discard(scope)
         self._save_mute_list()
@@ -77,7 +91,6 @@ class EventHandler:
     async def _parse_message_components(self, event: AstrMessageEvent) -> tuple[list[str], list[str]]:
         """
         解析消息事件，提取文本内容和图片路径。
-        对于图片，会进行下载并返回本地路径。
         """
         texts = []
         image_paths = []
@@ -85,7 +98,6 @@ class EventHandler:
         for component in event.message_obj.message:
             if isinstance(component, Comp.Plain):
                 cleaned_text = component.text.strip()
-                # 移除 @ 机器人的文本部分
                 if isinstance(component, Comp.At) and str(component.qq) == str(event.message_obj.self_id):
                     continue
                 if cleaned_text:
@@ -94,7 +106,7 @@ class EventHandler:
                 if image_url := component.url:
                     if saved_path := await self._download_image(image_url):
                         image_paths.append(str(saved_path))
-                        texts.append("[图片]")  # 在文本流中加入占位符
+                        texts.append("[图片]")
 
         return texts, image_paths
 
@@ -144,24 +156,25 @@ class EventHandler:
         sender_name = event.get_sender_name()
         timestamp = event.message_obj.timestamp
         
-        for component in event.message_obj.message:
-            if isinstance(component, Comp.Plain):
-                text_content = component.text.strip()
-                if text_content:
-                    await self.rag_db.add_text(group_id, sender_id, sender_name, text_content, timestamp)
-            elif isinstance(component, Comp.Image):
-                if image_url := component.url:
-                    if saved_path := await self._download_image(image_url):
-                        await self.rag_db.add_image(group_id, sender_id, sender_name, saved_path, timestamp)
-                        self._cleanup_old_images()
+        texts, image_paths = await self._parse_message_components(event)
+
+        text_content = " ".join(texts)
+        if text_content:
+            await self.rag_db.add_text(group_id, sender_id, sender_name, text_content, timestamp)
+        
+        for image_path in image_paths:
+            await self.rag_db.add_image(group_id, sender_id, sender_name, Path(image_path), timestamp)
+
+        if image_paths:
+             self._cleanup_old_images()
 
     async def process_rag_search_command(self, event: AstrMessageEvent, query: str):
         """
-        [业务逻辑] 处理 RAG 搜索指令，并将结果格式化后发送（文本直接发，图片发送图片文件）。
+        [业务逻辑] 处理 RAG 搜索指令，并将结果格式化后发送（直接发送）。
         """
         group_id = event.get_group_id()
         if not group_id:
-            yield event.plain_result("抱歉，此命令只能在群聊中使用。")
+            yield event.chain_result([Comp.Plain("抱歉，此命令只能在群聊中使用。")])
             return
 
         top_k = self.config.get("top_k_text_results", 5)
@@ -170,7 +183,7 @@ class EventHandler:
         results = await self.rag_db.query(query, group_id, top_k, top_j)
         
         if not results:
-            yield event.plain_result("没有找到相关的聊天记录。")
+            yield event.chain_result([Comp.Plain("没有找到相关的聊天记录。")])
             return
             
         for res in results:
@@ -185,33 +198,34 @@ class EventHandler:
                         Comp.Image.fromFileSystem(image_path_str)
                     ])
                 else:
-                    yield event.plain_result(f"{sender_info}\n[一张已过期的图片] (ID: {image_path.stem})")
+                    yield event.chain_result([Comp.Plain(f"{sender_info}\n[一张已过期的图片] (ID: {image_path.stem})")])
             else:
                 text_content = res['text']
-                yield event.plain_result(f"{sender_info} {text_content}")
+                yield event.chain_result([Comp.Plain(f"{sender_info} {text_content}")])
             
             await asyncio.sleep(0.5)
 
-    async def _should_reply(self, event: AstrMessageEvent, is_mentioned: bool) -> bool:
+    async def _should_reply(self, event: AstrMessageEvent, is_mentioned: bool) -> tuple[bool, str]:
         """
-        [新逻辑] 使用小模型判断回复概率，决定是否回复。
+        [新逻辑] 使用小模型判断回复概率和方式，决定是否及如何回复。
+        返回一个元组 (should_reply: bool, reply_style: str)。
         """
         group_id = event.get_group_id()
         if 'all' in self.muted_groups or (group_id and group_id in self.muted_groups):
-            return False
+            return False, 'quote'
 
         if is_mentioned:
-            logger.info("机器人被提及，强制回复。")
-            return True
+            logger.info("机器人被提及，强制引用回复。")
+            return True, 'quote'
 
         if not self.judgement_provider_id:
             logger.info(f"未配置判断模型，使用备用随机概率 ({self.reply_possibility * 100}%)。")
-            return random.random() < self.reply_possibility
+            return random.random() < self.reply_possibility, 'direct'
             
         provider = self.context.get_provider_by_id(self.judgement_provider_id)
         if not provider:
             logger.error(f"找不到 ID 为 '{self.judgement_provider_id}' 的服务提供商，本次不回复。")
-            return False
+            return False, 'quote'
         
         message_text = event.message_str.strip()
         if not message_text:
@@ -220,37 +234,42 @@ class EventHandler:
         prompt = self.judgement_prompt.format(message_text=message_text)
         
         try:
-            logger.info(f"正在调用小模型 ({self.judgement_provider_id}) 判断回复概率...")
+            logger.info(f"正在调用小模型 ({self.judgement_provider_id}) 判断回复概率和方式...")
             llm_resp = await provider.text_chat(prompt=prompt)
             decision_text = llm_resp.completion_text.strip()
+            logger.info(prompt)
 
-            # 尝试将回复转换为浮点数
-            probability = float(decision_text)
-            logger.info(f"小模型返回的回复概率是: {probability:.2f}")
+            decision_data = json.loads(decision_text)
+            probability = float(decision_data.get("probability", 0))
+            reply_style = decision_data.get("reply_style", "direct")
+            
+            if reply_style not in ['direct', 'quote']:
+                reply_style = 'direct'
 
-            # 与随机数比较
+            logger.info(f"小模型返回的回复概率是: {probability:.2f}, 回复方式: {reply_style}")
+
             should = random.random() < probability
             logger.info(f"判断结果: {'回复' if should else '不回复'}。")
-            return should
+            return should, reply_style
 
-        except (ValueError, TypeError):
-            logger.warning(f"小模型返回的内容 '{decision_text}' 不是一个有效的概率值，本次不回复。")
-            return False
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.warning(f"小模型返回的内容 '{decision_text}' 不是有效的 JSON 或概率值，本次不回复。错误: {e}")
+            return False, 'quote'
         except Exception as e:
             logger.error(f"调用小模型判断概率时发生错误: {e}")
-            return False
+            return False, 'quote'
 
 
     def _format_rag_results_for_prompt(self, results: list) -> tuple[str, list[str]]:
         """
-        [修改后] 将 RAG 搜索结果格式化为 Prompt 的一部分，并提取图片路径。
-        返回一个元组：(格式化后的文本, 图片路径列表)
+        将 RAG 搜索结果格式化为 Prompt 的一部分，并提取图片路径。
         """
         if not results:
             return "", []
         
         image_paths = []
         prompt_text = "--- 以下是从历史聊天记录中检索到的相关消息，请参考 ---\n\n"
+        # 仅取最近5条记录用于上下文
         for res in sorted(results, key=lambda x: x['timestamp'], reverse=True)[:5]:
             ts = datetime.fromtimestamp(res['timestamp']).strftime('%Y-%m-%d %H:%M:%S')
             sender_info = f"[{ts}] {res['sender_name']}:"
@@ -265,9 +284,9 @@ class EventHandler:
         prompt_text += "\n--- 历史消息结束 ---\n"
         return prompt_text, image_paths
 
-    async def _process_user_conversation(self, conversation_key: tuple, event: AstrMessageEvent):
+    async def _process_user_conversation(self, conversation_key: tuple, event: AstrMessageEvent, reply_style: str = 'quote'):
         """
-        在等待窗口结束后，处理收集到的用户消息。
+        处理收集到的用户消息，并根据 reply_style 决定回复方式。
         """
         try:
             if conversation_key not in self.user_conversations:
@@ -275,15 +294,14 @@ class EventHandler:
 
             conversation_data = self.user_conversations[conversation_key]
             
-            # 整合消息
             combined_text = " ".join(conversation_data['texts'])
             collected_image_paths = conversation_data['image_paths']
             sender_name = conversation_data['sender_name']
             group_id = conversation_key[0]
 
-            logger.info(f"固定等待窗口结束，开始处理来自 {sender_name} 的消息: '{combined_text}'")
+            logger.info(f"开始处理来自 {sender_name} 的消息: '{combined_text}'")
 
-            if not combined_text:
+            if not combined_text and not collected_image_paths:
                 logger.info("收集到的消息为空，不处理。")
                 return
                 
@@ -327,7 +345,12 @@ class EventHandler:
 
                 if reply_text:
                     logger.info(f"LLM 返回结果: {reply_text}")
-                    yield event.plain_result(reply_text)
+                    if reply_style == 'direct':
+                        logger.info("执行直接回复 (chain_result)。")
+                        await event.send(event.plain_result(reply_text))
+                    else:
+                        logger.info("执行引用回复 (plain_result)。")
+                        yield event.plain_result(reply_text)
                 else:
                     logger.warning("LLM 返回了空内容，本次不回复。")
             except Exception as e:
@@ -337,6 +360,7 @@ class EventHandler:
             if conversation_key in self.user_conversations:
                 del self.user_conversations[conversation_key]
                 logger.info(f"已清理会话: {conversation_key}")
+
 
     async def handle_new_message(self, event: AstrMessageEvent):
         asyncio.create_task(self.handle_group_message_logging(event))
@@ -363,8 +387,8 @@ class EventHandler:
         if is_mentioned and self.at_message_window > 0:
             logger.info(f"机器人被 {event.get_sender_name()} 提及，启动一个固定的消息等待窗口 ({self.at_message_window}秒)。")
             
-            prompt_text = self.at_message_prompt.format(timeout=self.at_message_window)
-            #yield event.plain_result(prompt_text)
+            # prompt_text = self.at_message_prompt.format(timeout=self.at_message_window)
+            # yield event.plain_result(prompt_text)
 
             texts, image_paths = await self._parse_message_components(event)
             self.user_conversations[conversation_key] = {
@@ -375,11 +399,11 @@ class EventHandler:
             
             await asyncio.sleep(self.at_message_window)
             
-            async for result in self._process_user_conversation(conversation_key, event):
+            async for result in self._process_user_conversation(conversation_key, event, reply_style='quote'):
                 yield result
             return
             
-        should_reply = await self._should_reply(event, is_mentioned)
+        should_reply, reply_style = await self._should_reply(event, is_mentioned)
         if should_reply:
             single_reply_key = (group_id, f"single_reply_{sender_id}_{uuid.uuid4()}")
             texts, image_paths = await self._parse_message_components(event)
@@ -388,5 +412,5 @@ class EventHandler:
                 "image_paths": image_paths,
                 "sender_name": event.get_sender_name()
             }
-            async for result in self._process_user_conversation(single_reply_key, event):
+            async for result in self._process_user_conversation(single_reply_key, event, reply_style=reply_style):
                  yield result

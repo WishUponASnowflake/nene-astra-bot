@@ -4,6 +4,7 @@ from pathlib import Path
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
+import astrbot.api.message_components as Comp
 
 from .rag_database import RAGDatabase
 from .event_handler import EventHandler
@@ -13,22 +14,22 @@ from .dashscope_provider import DashscopeProvider
     "astrbot_plugin_nene_bot",
     "sdy_zjx", # 作者名
     "一个基于RAG与大模型的赛博群友",
-    "1.0.0", 
+    "1.0.0",
     "https://github.com/your-repo/astrbot_plugin_rag_collector"
 )
 class RAGCollectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        
+
         provider = None
         try:
             # 从插件配置中读取 dashscope 的配置 (现在主要为 model_name)
             ds_config = self.config.get("dashscope_config", {})
-            
+
             # 创建 DashscopeProvider 实例。
             provider = DashscopeProvider(config=ds_config)
-            
+
             logger.info(f"插件 'rag_collector' 成功创建 Dashscope 提供商，模型: {provider.model_name}。")
 
         except Exception as e:
@@ -40,21 +41,21 @@ class RAGCollectorPlugin(Star):
         plugin_data_path = Path("data") / "rag_collector_plugin"
         db_path = plugin_data_path / "lancedb"
         image_path = plugin_data_path / "images"
-        
+
         # 初始化数据库实例
         self.db = RAGDatabase(db_path=db_path, embedding_provider=provider)
-        
+
         # 初始化事件处理器
         self.handler = EventHandler(
-            context=context, 
+            context=context,
             config=self.config,
-            rag_db=self.db, 
+            rag_db=self.db,
             image_save_path=image_path
         )
-        
+
         # 进行数据库表的初始化
         self.db.init_table()
-        
+
         logger.info("RAG Collector 插件已加载。")
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
@@ -78,52 +79,46 @@ class RAGCollectorPlugin(Star):
         """
         [注册] /llm_mute 指令，禁用自动回复。
         """
-        # --- 修正點 ---
         sender_id = event.get_sender_id()
         admins = self.config.get("admins_id", [])
-        logger.info(sender_id)
         is_admin = sender_id in admins
-        logger.info(admins)
-        # ---------------
 
         if not is_admin:
-            yield event.plain_result("抱歉，只有管理员才能使用此命令。")
+            yield event.chain_result([Comp.Plain("抱歉，只有管理员才能使用此命令。")])
             return
-            
+
         if not scope:
-            yield event.plain_result("请输入要禁用的范围 (all / 群号)。")
+            yield event.chain_result([Comp.Plain("请输入要禁用的范围 (all / 群号)。")])
             return
 
         self.handler.mute(scope)
         if scope == 'all':
-            yield event.plain_result("已全局禁用所有群聊的自动回复功能。")
+            yield event.chain_result([Comp.Plain("已全局禁用所有群聊的自动回复功能。")])
         else:
-            yield event.plain_result(f"已禁用群聊 {scope} 的自动回复功能。")
+            yield event.chain_result([Comp.Plain(f"已禁用群聊 {scope} 的自动回复功能。")])
 
     @filter.command("llm_enable")
     async def llm_enable(self, event: AstrMessageEvent, *, scope: str):
         """
         [注册] /llm_enable 指令，启用自动回复。
         """
-        # --- 修正點 ---
         sender_id = event.get_sender_id()
         admins = self.config.get("admins_id", [])
         is_admin = sender_id in admins
-        # ---------------
-        
+
         if not is_admin:
-            yield event.plain_result("抱歉，只有管理员才能使用此命令。")
+            yield event.chain_result([Comp.Plain("抱歉，只有管理员才能使用此命令。")])
             return
-            
+
         if not scope:
-            yield event.plain_result("请输入要启用的范围 (all / 群号)。")
+            yield event.chain_result([Comp.Plain("请输入要启用的范围 (all / 群号)。")])
             return
-            
+
         self.handler.unmute(scope)
         if scope == 'all':
-            yield event.plain_result("已全局启用所有群聊的自动回复功能。")
+            yield event.chain_result([Comp.Plain("已全局启用所有群聊的自动回复功能。")])
         else:
-            yield event.plain_result(f"已启用群聊 {scope} 的自动回复功能。")
+            await event.send(event.plain_result(f"已启用群聊 {scope} 的自动回复功能。"))
 
 
     async def terminate(self):
