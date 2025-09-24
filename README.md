@@ -8,12 +8,15 @@
 - 回复机制prompt可自定义，用户可根据需求定制回复机制。
 
 相关、有延续性的话题回复概率高：
+
 ![QQ20250924-113345.png](https://s2.loli.net/2025/09/24/1jHpqwUC5WvsEtr.png)
 
 不相关，或者用户正在与其他用户对话时不随意插嘴：
+
 ![QQ_1758684935673.png](https://s2.loli.net/2025/09/24/e9TG6EY1MyjwLAm.png)
 
 ![QQ20250924-113941.png](https://s2.loli.net/2025/09/24/aAdFMD3O41xhUtp.png)
+
 ![QQ20250924-113838.png](https://s2.loli.net/2025/09/24/rGt9NKkgoMZ5s2u.png)
 # 注意
 - 本项目采用qwen multimodal-embedding-v1作为嵌入模型。需要配置dashscope与阿里云百炼api key。具体请参见：https://github.com/dashscope/dashscope-sdk-python
