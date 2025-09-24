@@ -6,6 +6,7 @@ import random
 import json
 from pathlib import Path
 from datetime import datetime
+from collections import defaultdict, deque
 
 import astrbot.api.message_components as Comp
 from astrbot.api.event import AstrMessageEvent
@@ -23,25 +24,36 @@ class EventHandler:
         self.image_save_path.mkdir(parents=True, exist_ok=True)
         self.max_local_images = self.config.get("max_local_images", 50)
 
-        # 更新判断模型的 Prompt，要求返回包含概率和回复方式的 JSON
+        # "是否回复"决策模型的配置
         judgement_model_config = self.config.get("judgement_model", {})
         self.judgement_provider_id = judgement_model_config.get("provider_id")
-        self.judgement_prompt = judgement_model_config.get("judgement_prompt", """你是一个群聊中 AI 助手的回复决策模型。你的任务是判断 AI 助手对以下新消息进行回复的“必要性”和“趣味性”，并决定回复方式。
+        self.judgement_prompt = judgement_model_config.get("judgement_prompt", """你是一个群聊中 AI 助手的回复决策模型。你的任务是分析以下聊天记录和最新消息，判断 AI 助手进行回复的“必要性”和“趣味性”，并决定回复方式。你的名字叫'宁宁'。
 
-请遵循以下标准：1.  **必要性判断**：给出一个 0.0 到 1.0 之间的概率分数。你的名字是宁宁。当有人叫你的名字的时候你的回复概率为1：1. 话题轻松有趣、适合闲聊时，概率更高。2. 话题直接与 AI、机器人、模型或代码相关时，概率应该较高（0.3-0.6）。3. 用户在明确寻求帮助、提问时，概率应该为 0.4-0.7。4. 如果是严肃、专业或工作相关的话题，概率应该为0。5. 无意义的闲聊或表情符号，概率应该接近 0.0。6. 用户在和其他用户对话（如at其他用户 ，出现形如[At:xxxxxx]；聊天内容中出现人名/网名；话题明显与你无关）时你不应该插嘴。你的回复概率应该为0。你应该学会读气氛。 7. **你的名字是宁宁。当有人叫你的名字的时候你的回复概率为1. **  
+--- 最近的聊天记录 ---
+{message_queue}
+
+--- 最新消息 ---
+{message_text}
+
+--- 回复标准 ---
+1.  **必要性判断**：给出一个 0.0 到 1.0 之间的概率分数。
+    -   当最新消息明显是对话题的延续，或者直接提到了你（宁宁），或者向你提问时，概率应为 1.0。
+    -   话题轻松有趣、适合闲聊，概率可以高一些 (0.6-0.8)。
+    -   话题与 AI、代码等相关，概率较高 (0.5-0.7)。
+    -   如果大家在讨论一个你完全不了解的私人话题，或者最新消息明显是用户间的对话（例如 @其他人），请保持安静，概率为 0.0。
+    -   无意义的闲聊或表情符号，概率应接近 0.0。
 2.  **回复方式判断**：
-    -   如果消息是对话题的延续、补充或者是一个开放性的陈述，适合用 'direct' (直接回复)。
-    -   如果消息是一个明确的问题，或者上下文不清晰，为了让对话更清晰，适合用 'quote' (引用回复)。
-    -   默认情况下，倾向于使用 'direct'，让对话更自然。
+    -   如果消息是对话题的延续或开放性陈述，使用 'direct' (直接回复)。
+    -   如果消息是明确的问题或为了避免误解，使用 'quote' (引用回复)。
+
 你的回答必须是一个严格的 JSON 对象，格式如下：
 {{"probability": <概率值>, "reply_style": "<direct 或 quote>"}}
 
-例如：
-{{"probability": 0.85, "reply_style": "direct"}}
-
-群聊新消息："{message_text}"
 根据以上标准，你的决策是？""")
         self.reply_possibility = self.config.get("reply_possibility", 0.1)
+
+        # "是否需要RAG"决策模型的Prompt
+        self.rag_decision_prompt = self.config.get("rag_decision_prompt", """你是一个智能助手，负责分析对话并决定是否需要查找历史资料（RAG）来更好地回答问题。请分析以下最近的对话记录和当前用户消息。你的任务是：1. 判断是否有必要查找历史资料。如果当前对话主题明确、问题简单，或只是闲聊，则不需要。如果用户提到了过去的事情、不明确的代称，或提出了需要背景知识的复杂问题，则需要查找。2. 如果需要查找，请提炼出一个简洁、精确的关键词用于搜索。你的回答必须是一个严格的 JSON 对象，格式如下：{{\"rag_needed\": <true 或 false>, \"keyword\": \"<关键词>\"}}。例如：{{\"rag_needed\": true, \"keyword\": \"上次讨论的AI项目\"}} 或 {{\"rag_needed\": false, \"keyword\": \"\"}}。以下是对话内容：\n\n--- 最近对话 ---\n{message_queue}\n--- 当前消息 ---\n{current_message}\n\n你的决策是？""")
 
         # 读取最终回复大模型和人格的配置
         main_llm_config = self.config.get("main_llm_provider", {})
@@ -56,6 +68,11 @@ class EventHandler:
         # 初始化静音列表
         self.mute_list_path = self.image_save_path.parent / "mute_list.json"
         self.muted_groups = self._load_mute_list()
+        
+        # 初始化消息队列
+        self.message_queue_size = self.config.get("message_queue_size", 10)
+        self.message_queues = defaultdict(lambda: deque(maxlen=self.message_queue_size))
+
 
     def _load_mute_list(self) -> set:
         if self.mute_list_path.exists():
@@ -205,10 +222,10 @@ class EventHandler:
             
             await asyncio.sleep(0.5)
 
+    # --- 核心修改点 ---
     async def _should_reply(self, event: AstrMessageEvent, is_mentioned: bool) -> tuple[bool, str]:
         """
-        [新逻辑] 使用小模型判断回复概率和方式，决定是否及如何回复。
-        返回一个元组 (should_reply: bool, reply_style: str)。
+        使用小模型判断回复概率和方式，决定是否及如何回复。
         """
         group_id = event.get_group_id()
         if 'all' in self.muted_groups or (group_id and group_id in self.muted_groups):
@@ -227,18 +244,33 @@ class EventHandler:
             logger.error(f"找不到 ID 为 '{self.judgement_provider_id}' 的服务提供商，本次不回复。")
             return False, 'quote'
         
+        # 准备上下文信息
         message_text = event.message_str.strip()
         if not message_text:
             message_text = "[用户发送了非文本消息]"
 
-        prompt = self.judgement_prompt.format(message_text=message_text)
+        # 获取最近的聊天记录
+        message_queue_list = self.message_queues.get(group_id, [])
+        # 我们需要除开当前消息的最近记录
+        # 如果队列不为空且最后一项是当前消息，则暂时移除
+        if message_queue_list and message_queue_list[-1] == f"{event.get_sender_name()}: {message_text}":
+             message_queue_for_prompt = "\n".join(list(message_queue_list)[:-1])
+        else:
+             message_queue_for_prompt = "\n".join(message_queue_list)
+
+
+        # 格式化Prompt
+        prompt = self.judgement_prompt.format(
+            message_queue=message_queue_for_prompt,
+            message_text=f"{event.get_sender_name()}: {message_text}"
+        )
         
         try:
+            logger.info(prompt)
             logger.info(f"正在调用小模型 ({self.judgement_provider_id}) 判断回复概率和方式...")
             llm_resp = await provider.text_chat(prompt=prompt)
             decision_text = llm_resp.completion_text.strip()
-            logger.info(prompt)
-
+            
             decision_data = json.loads(decision_text)
             probability = float(decision_data.get("probability", 0))
             reply_style = decision_data.get("reply_style", "direct")
@@ -258,6 +290,63 @@ class EventHandler:
         except Exception as e:
             logger.error(f"调用小模型判断概率时发生错误: {e}")
             return False, 'quote'
+    # --- 修改结束 ---
+
+    async def _decide_rag_and_get_keyword(self, group_id: str, current_message: str) -> tuple[bool, str]:
+        """
+        [新逻辑] 使用小模型判断是否需要 RAG 查找并提取关键词。
+        """
+        if not self.judgement_provider_id:
+            logger.warning("未配置判断模型，默认不进行 RAG 查找。")
+            return False, ""
+        
+        provider = self.context.get_provider_by_id(self.judgement_provider_id)
+        if not provider:
+            logger.error(f"找不到 ID 为 '{self.judgement_provider_id}' 的服务提供商，无法进行 RAG 决策。")
+            return False, ""
+
+        # 准备短期消息队列
+        message_queue_list = self.message_queues.get(group_id, [])
+        message_queue_str = "\n".join(message_queue_list)
+
+        prompt = self.rag_decision_prompt.format(
+            message_queue=message_queue_str,
+            current_message=current_message
+        )
+
+        try:
+            logger.info(f"正在调用小模型 ({self.judgement_provider_id}) 进行 RAG 决策...")
+            llm_resp = await provider.text_chat(prompt=prompt)
+            decision_text = llm_resp.completion_text.strip()
+
+            decision_data = json.loads(decision_text)
+            rag_needed = bool(decision_data.get("rag_needed", False))
+            keyword = decision_data.get("keyword", "")
+
+            logger.info(f"RAG 决策结果: 需要查找={rag_needed}, 关键词='{keyword}'")
+            return rag_needed, keyword
+
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            logger.warning(f"RAG 决策模型返回的内容 '{decision_text}' 不是有效的 JSON，本次不进行 RAG 查找。错误: {e}")
+            return False, ""
+        except Exception as e:
+            logger.error(f"调用 RAG 决策模型时发生错误: {e}")
+            return False, ""
+
+
+    def _format_message_queue_for_prompt(self, group_id: str) -> str:
+        """
+        将消息队列格式化为 Prompt 的一部分。
+        """
+        if not group_id in self.message_queues or not self.message_queues[group_id]:
+            return ""
+        
+        prompt_text = "--- 以下是最近的聊天记录 ---\n\n"
+        for msg in self.message_queues[group_id]:
+            prompt_text += f"{msg}\n"
+        
+        prompt_text += "\n--- 最近聊天记录结束 ---\n"
+        return prompt_text
 
 
     def _format_rag_results_for_prompt(self, results: list) -> tuple[str, list[str]]:
@@ -304,10 +393,22 @@ class EventHandler:
             if not combined_text and not collected_image_paths:
                 logger.info("收集到的消息为空，不处理。")
                 return
-                
-            top_k = self.config.get("top_k_text_results", 5)
-            top_j = self.config.get("top_j_image_results", 3)
-            rag_results = await self.rag_db.query(combined_text, group_id, top_k, top_j)
+            
+            # 1. 调用小模型决策是否需要 RAG 并获取关键词
+            rag_needed, keyword = await self._decide_rag_and_get_keyword(group_id, f"{sender_name}: {combined_text}")
+            
+            rag_context_str = ""
+            rag_image_paths = []
+            
+            # 2. 如果需要，则执行 RAG 搜索
+            if rag_needed and keyword:
+                logger.info(f"根据决策，使用关键词 '{keyword}' 进行 RAG 搜索...")
+                top_k = self.config.get("top_k_text_results", 5)
+                top_j = self.config.get("top_j_image_results", 3)
+                rag_results = await self.rag_db.query(keyword, group_id, top_k, top_j)
+                rag_context_str, rag_image_paths = self._format_rag_results_for_prompt(rag_results)
+            else:
+                logger.info("根据决策，本次回复无需 RAG 查找。")
 
             if not self.main_llm_provider_id:
                 logger.error("未在插件设定中指定用于最终回复的大语言模型，无法生成回复。")
@@ -320,12 +421,14 @@ class EventHandler:
                 yield event.plain_result("抱歉，管理员指定的回复大脑好像不见了，我暂时无法回答。")
                 return
                 
-            rag_context_str, rag_image_paths = self._format_rag_results_for_prompt(rag_results)
+            # 获取短期消息队列
+            message_queue_str = self._format_message_queue_for_prompt(group_id)
             all_image_urls = rag_image_paths + collected_image_paths
                 
             prompt = (
-                f"{rag_context_str}\n"
-                f"现在，请基于以上可能相关的历史消息（包括文字和图片），以前后文一致、符合群聊氛围的口语化方式，自然地回复以下这条新消息。\n"
+                f"{message_queue_str}\n"
+                f"{rag_context_str}\n" # 如果不需要RAG，这里会是空字符串
+                f"现在，请基于以上最近聊天记录和可能相关的历史检索消息（包括文字和图片），以前后文一致、符合群聊氛围的口语化方式，自然地回复以下这条新消息。\n"
                 f"你的回复应当简洁、直接，不要重复历史消息的内容，也不要提及你参考了历史消息。\n\n"
                 f"新消息来自「{sender_name}」: \"{combined_text}\"\n\n"
                 f"你的回复："
@@ -363,9 +466,16 @@ class EventHandler:
 
 
     async def handle_new_message(self, event: AstrMessageEvent):
+        # 将消息添加到对应群聊的队列
+        group_id = event.get_group_id()
+        if group_id:
+            # 存储格式为 "发送者: 消息内容"
+            message_text = event.message_str.strip()
+            if message_text: # 确保不添加空消息
+                self.message_queues[group_id].append(f"{event.get_sender_name()}: {message_text}")
+
         asyncio.create_task(self.handle_group_message_logging(event))
 
-        group_id = event.get_group_id()
         sender_id = event.get_sender_id()
         if not group_id or not sender_id:
             return
